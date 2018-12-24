@@ -1,0 +1,288 @@
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+DROP TABLE IF EXISTS yellow_tripdata_nov_k_k;
+
+CREATE EXTERNAL TABLE `default`.`yellow_tripdata_nov_k_k`
+(
+  `VendorID` bigint ,
+  `tpep_pickup_datetime` timestamp ,
+  `tpep_dropoff_datetime` timestamp ,
+  `passenger_count` int ,
+  `trip_distance` double ,
+  `RatecodeID` int ,
+  `store_and_fwd_flag` varchar(2) ,
+  `PULocationID` int ,
+  `DOLocationID` int ,
+  `payment_type` int ,
+  `fare_amount` double ,
+  `extra` double ,
+  `mta_tax` double ,
+  `tip_amount` double ,
+  `tolls_amount` bigint ,
+  `improvement_surcharge` double ,
+  `total_amount` double )  ROW FORMAT   DELIMITED
+    FIELDS TERMINATED BY ','
+  STORED AS TextFile LOCATION '/common_folder/nyc_taxi_data/'
+TBLPROPERTIES("skip.header.line.count" = "2");
+
+--TO count no of records 
+	select count(*) from yellow_tripdata_nov_k_k;
+--	18793079*
+
+--To check if there is data of any month apart from November,December 
+select month(tpep_dropoff_datetime)as month,avg(fare_amount) from yellow_tripdata_nov_k_k 
+group by month(tpep_dropoff_datetime);
+
+-- to check no of vendors and passanger count 
+select count(passenger_count) as pascount,vendorid as vendor from yellow_tripdata_nov_k_k group by vendorid;
+ --vendor 1:- 8447149  
+   --vendor 2:- 10345930*/
+   
+   -- PARTITION THE DATA  */
+-- IMPORTANT: BEFORE PARTITIONING ANY TABLE, MAKE SURE YOU RUN THESE COMMANDS */
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+
+-- First drop the table
+--Its best practice to use drop table command as if there is any table with that name will be removed*/
+	drop table taxidata_month_partitioned;
+
+-- Then create external table */
+--partitioning is important as it lets us filter data or partition data without affecting the orignal table */
+		create external table if not exists taxidata_month_partitioned
+		(vendorid bigint,`tpep_pickup_datetime` timestamp ,
+		`tpep_dropoff_datetime` timestamp ,
+		`passenger_count` int ,
+		`trip_distance` double ,
+		`RatecodeID` int ,
+		`store_and_fwd_flag` varchar(2) ,
+		`PULocationID` int ,
+		`DOLocationID` int ,
+		`payment_type` int ,
+		`fare_amount` double ,
+		`extra` double ,
+		`mta_tax` double ,
+		`tip_amount` double ,
+		`tolls_amount` bigint ,
+		`improvement_surcharge` double ,
+		`total_amount` double) partitioned by (nyc_year int, nyc_month int)
+		location '/user/kaushal.mshr_gmail/';
+
+
+--inserting data into the partion table from the orignal table */
+	insert overwrite table taxidata_month_partitioned partition(nyc_year, nyc_month)
+	select vendorid,tpep_pickup_datetime,tpep_dropoff_datetime,passenger_count,trip_distance,ratecodeid,store_and_fwd_flag,pulocationid,dolocationid,
+	payment_type,fare_amount,extra,mta_tax,tip_amount,tolls_amount,improvement_surcharge,total_amount,year(tpep_pickup_datetime) as nyc_year,
+	month(tpep_pickup_datetime) as nyc_month
+	from yellow_tripdata_nov_k_k where year(tpep_pickup_datetime)=2017 and 
+	month(tpep_pickup_datetime) in (11,12) and year(tpep_dropoff_datetime)=2017 
+	and month(tpep_dropoff_datetime) in (11,12) 
+	and unix_timestamp(tpep_pickup_datetime)<unix_timestamp(tpep_dropoff_datetime) 
+	and passenger_count in (1,2,3,4,5,6,7) and trip_distance >0.0 
+	and payment_type in (1,2,3,4,5,6) and fare_amount>0.0 
+	and extra in (0,0.50,1) and mta_tax in (0,0.50) 
+	and improvement_surcharge in (0,0.3) and 
+	total_amount > 0.0 and ratecodeid in (1,2,3,4,5,6);
+ 
+
+select count(*) from taxidata_month_partitioned;
+--18480994*/
+
+--1.)  overall average fare per trip for November and December*/
+select nyc_month as month, avg(fare_amount)
+from taxidata_month_partitioned
+group by nyc_month;
+--november :- 12.9044
+--  december :- 12.7884 */
+
+--2.) ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’*/
+select passenger_count as pcount,count(tpep_pickup_datetime) from taxidata_month_partitioned group by passenger_count;
+-- most people travel solo i.e. 13102523
+-- 2 people 2785290
+-- leasr is 7 people traveling together i.e 27 time --
+ 
+ 
+ --3.) most preferred mode of payment*/
+ select payment_type as Payt , count(tpep_pickup_datetime) from taxidata_month_partitioned group by payment_type;
+ -- Most prefered payment type is 1 :- credit card
+  and 2nd most prefered is 2 :- cash */
+  
+--4.)What is the average tip paid per trip*/
+  select avg(tip_amount) as avg_tip from taxidata_month_partitioned; 
+  --average tip is 1.8243 */
+  
+	select avg(tip_amount) as avg_trip,
+	percentile_approx(tip_amount,0.25)  as Weekday25pctile,
+	percentile_approx(tip_amount,0.50) as Weekday50pctile,
+	percentile_approx(tip_amount,0.75) as Weekday75pctile
+	from taxidata_month_partitioned;
+--
+--    avg_trip	weekday25pctile	weekday50pctile	weekday75pctile
+--	1.82435858  	0	           1.36 	           2.45
+ 
+
+--5.)Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+
+select count(extra) from taxidata_month_partitioned;
+--18480994*/
+ select count(extra) as extra from taxidata_month_partitioned where extra > 0;
+--8524854*/
+select (8524854/18480994) as fraction
+-- 0.46 */
+
+---------ANALYSIS 2---------*/
+
+-- 1.)correlation between the number of passengers on any given trip, and the tip paid per trip*/
+	select corr(passenger_count, tip_amount) as Corrvalue 
+	from taxidata_month_partitioned
+	where nyc_year = 2017 and nyc_month in (11,12);
+
+-- 2.)Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+    Calculate the percentage share of each bucket */
+    select count(*)/18485213*100 from taxidata_month_partitioned where tip_amount>=0 and tip_amount <=5; 
+    select count(*)/18485213*100 from taxidata_month_partitioned where tip_amount>5 and tip_amount <=10; 
+    select count(*)/18485213*100 from taxidata_month_partitioned where tip_amount>10 and tip_amount <=15;
+    select count(*)/18485213*100 from taxidata_month_partitioned where tip_amount>15 and tip_amount <=20;
+    select count(*)/18485213*100 from taxidata_month_partitioned where tip_amount>20 and tip_amount <=25; 
+
+
+--3.)month has a greater average ‘speed’ - November or December*/
+    select avg(trip_distance/(unix_timestamp(tpep_dropoff_datetime)/3600-unix_timestamp(tpep_pickup_datetime)/3600))as speed, nyc_month as month
+    from taxidata_month_partitioned  group by nyc_month;
+--November has higher average speed */
+
+    select avg(trip_distance/(unix_timestamp(tpep_dropoff_datetime)/3600-unix_timestamp(tpep_pickup_datetime)/3600))as speed,day(tpep_pickup_datetime)
+    from taxidata_month_partitioned  where day(tpep_dropoff_datetime) in (25,31) and month(tpep_dropoff_datetime)=12 group by day(tpep_pickup_datetime);
+
+--4.)the average speed of the most happening days of the year, i.e. 31st December (New year’s eve) and 25th December (Christmas Eve) and 
+--compare it with the overall average*/
+
+    select avg(trip_distance/(unix_timestamp(tpep_dropoff_datetime)/3600-unix_timestamp(tpep_pickup_datetime)/3600))as speed
+    from taxidata_month_partitioned;
+--over all average speed = 12.65
+--while speed on 31st december=14.09
+--and 25th december = 16.89 
+--it is clear that speed on these two day is higher*/
+
+--- Trying ORC for performance improvement ---
+
+-- ORC FILE FORMAT */
+-- This format improves query performance */
+
+-- First, create ORC table */
+	create external table if not exists taxidata_year_month_partition_orc
+	(vendorid bigint,`tpep_pickup_datetime` timestamp ,
+	  `tpep_dropoff_datetime` timestamp ,
+	  `passenger_count` int ,
+	  `trip_distance` double ,
+	  `RatecodeID` int ,
+	  `store_and_fwd_flag` varchar(2) ,
+	  `PULocationID` int ,
+	  `DOLocationID` int ,
+	  `payment_type` int ,
+	  `fare_amount` double ,
+	  `extra` double ,
+	  `mta_tax` double ,
+	  `tip_amount` double ,
+	  `tolls_amount` bigint ,
+	  `improvement_surcharge` double ,
+	  `total_amount` double) partitioned by (nyc_year int, nyc_month int)
+	location '/user/kaushal.mshr_gmail/'
+	tblproperties ("orc.compress"="SNAPPY");
+
+-- Then, write data from partition table into ORC table */
+	insert overwrite table taxidata_year_month_partition_orc partition(nyc_year, nyc_month)
+	select vendorid,tpep_pickup_datetime,tpep_dropoff_datetime,passenger_count,trip_distance,ratecodeid,store_and_fwd_flag,pulocationid,dolocationid,
+	payment_type,fare_amount,extra,mta_tax,tip_amount,tolls_amount,improvement_surcharge,total_amount,year(tpep_pickup_datetime) as nyc_year,
+	month(tpep_pickup_datetime) as nyc_month
+	from yellow_tripdata_nov_k_k where year(tpep_pickup_datetime)=2017 and 
+	month(tpep_pickup_datetime) in (11,12) and year(tpep_dropoff_datetime)=2017 
+	and month(tpep_dropoff_datetime) in (11,12) 
+	and unix_timestamp(tpep_pickup_datetime)<unix_timestamp(tpep_dropoff_datetime) 
+	and passenger_count in (1,2,3,4,5,6,7) and trip_distance >0.0 
+	and payment_type in (1,2,3,4,5,6) and fare_amount>0.0 
+	and extra in (0,0.50,1) and mta_tax in (0,0.50) 
+	and improvement_surcharge in (0,0.3) and 
+	total_amount > 0.0 and ratecodeid in (1,2,3,4,5,6);
+
+
+select count(*) from taxidata_year_month_partition_orc;
+--18480994*/
+--  ------ANALYSIS 1-------   */
+-- 1.)  Overall average fare per trip for November and December*/
+	select nyc_month as month, avg(fare_amount)
+	from taxidata_year_month_partition_orc
+	group by nyc_month;
+--november :- 12.9044
+ -- december :- 12.7884 */
+
+
+--2.) ‘Number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’*/
+select passenger_count as pcount,count(tpep_pickup_datetime) from taxidata_year_month_partition_orc group by passenger_count;
+-- most people travel solo i.e. 13102523
+ --2 people 2785290
+ --least is 7 people traveling together i.e 27 time --
+ 
+ 
+ --3.) most preferred mode of payment*/
+ select payment_type as Payt , count(tpep_pickup_datetime) from taxidata_year_month_partition_orc group by payment_type;
+ -- Most prefered payment type is 1 :- credit card
+ -- and 2nd most prefered is 2 :- cash */
+  
+ -- 4.) What is the average tip paid per trip*/
+  select avg(tip_amount) as avg_tip from taxidata_month_partitioned; 
+  --average tip is 1.8243 */
+  
+  select avg(tip_amount) as avg_trip,percentile_approx(tip_amount,0.25)  as Weekday25pctile,
+percentile_approx(tip_amount,0.50) as Weekday50pctile,percentile_approx(tip_amount,0.75) as Weekday75pctile
+from taxidata_year_month_partition_orc;
+--
+   -- avg_trip	weekday25pctile	weekday50pctile	weekday75pctile
+	--1.82435858  	0	           1.36 	           2.45
+ 
+
+--5.) Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+*/
+select count(extra) from taxidata_year_month_partition_orc;
+--18480994*/
+ select count(extra) as extra from taxidata_year_month_partition_orc where extra > 0;
+--8524854*/
+select (8524854/18480994) as fraction
+-- 0.46 */
+
+---------ANALYSIS 2---------*/
+
+--1.) correlation between the number of passengers on any given trip, and the tip paid per trip*/
+select corr(passenger_count, tip_amount) as Corrvalue 
+from taxidata_year_month_partition_orc
+where nyc_year = 2017 and nyc_month in (11,12);
+
+-- 2.)Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+    Calculate the percentage share of each bucket */
+    select count(*)/18485213*100 from taxidata_year_month_partition_orc where tip_amount>=0 and tip_amount <=5; 
+    select count(*)/18485213*100 from taxidata_year_month_partition_orc where tip_amount>5 and tip_amount <=10; 
+    select count(*)/18485213*100 from taxidata_year_month_partition_orc where tip_amount>10 and tip_amount <=15;
+    select count(*)/18485213*100 from taxidata_year_month_partition_orc where tip_amount>15 and tip_amount <=20;
+    select count(*)/18485213*100 from taxidata_year_month_partition_orc where tip_amount>20 and tip_amount <=25; 
+    
+
+--3.)month has a greater average ‘speed’ - November or December
+select avg(trip_distance/(unix_timestamp(tpep_dropoff_datetime)/3600-unix_timestamp(tpep_pickup_datetime)/3600))as speed, nyc_month as month
+from taxidata_year_month_partition_orc  group by nyc_month;
+--November has higher average speed 
+
+select avg(trip_distance/(unix_timestamp(tpep_dropoff_datetime)/3600-unix_timestamp(tpep_pickup_datetime)/3600))as speed,day(tpep_pickup_datetime)
+from taxidata_year_month_partition_orc  where day(tpep_dropoff_datetime) in (25,31) and month(tpep_dropoff_datetime)=12 group by day(tpep_pickup_datetime);
+
+--4.)the average speed of the most happening days of the year, i.e. 31st December (New year’s eve) and 25th December (Christmas Eve) and 
+--compare it with the overall average
+
+select avg(trip_distance/(unix_timestamp(tpep_dropoff_datetime)/3600-unix_timestamp(tpep_pickup_datetime)/3600))as speed
+from taxidata_year_month_partition_orc;
+
+--over all average speed = 12.65
+--while speed on 31st december=14.09
+--and 25th december = 16.89 
+--it is clear that speed on these two day is higher
