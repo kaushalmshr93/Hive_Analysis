@@ -1,6 +1,7 @@
 ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
 SET hive.exec.max.dynamic.partitions=100000;
 SET hive.exec.max.dynamic.partitions.pernode=100000;
+
 DROP TABLE IF EXISTS yellow_tripdata_nov_k_k;
 
 CREATE EXTERNAL TABLE `default`.`yellow_tripdata_nov_k_k`
